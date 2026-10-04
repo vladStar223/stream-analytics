@@ -1,0 +1,56 @@
+services:
+  # ============================================================================
+  # ClickHouse Database Server
+  # ============================================================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123" # HTTP interface
+      - "9000:9000" # Native interface
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-analytics}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - analytics_net
+
+  # ============================================================================
+  # Python Stream Data Generator
+  # ============================================================================
+  generator:
+    build:
+      context: ./generator
+      dockerfile: Dockerfile
+    container_name: stream_generator
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - analytics_net
+
+# ==============================================================================
+# Networks & Volumes
+# ==============================================================================
+networks:
+  analytics_net:
+    name: analytics_net
+    driver: bridge
+
+volumes:
+  clickhouse_data:
+    name: clickhouse_data
