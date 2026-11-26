@@ -19,7 +19,12 @@ def index():
     with client() as ch:
         events = ch.query("SELECT timestamp, player_id, action_type, damage_dealt, ping_ms FROM fact_combat_events ORDER BY timestamp DESC LIMIT 25").result_rows
     containers = project_containers()
-    status = requests.get("http://generator:9100/rate", timeout=3).json()
+    try:
+        response = requests.get("http://generator:9100/rate", timeout=3)
+        response.raise_for_status()
+        status = response.json()
+    except requests.RequestException:
+        status = {"mode": "недоступен", "current_timestamp": "", "batch_size": ""}
     return render_template_string("""
     <!doctype html><meta charset=utf-8><title>Телеметрия MMORPG</title>
     <h1>Телеметрия MMORPG</h1>
@@ -33,8 +38,11 @@ def index():
 
 
 def project_containers():
-    with docker.from_env() as engine:
+    engine = docker.from_env()
+    try:
         return engine.containers.list(all=True, filters={"label": "com.docker.compose.project=" + os.environ["COMPOSE_PROJECT"]})
+    finally:
+        engine.close()
 
 
 @app.get("/logs/<service>")
