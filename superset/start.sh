@@ -8,9 +8,9 @@ import os
 from sqlalchemy.engine import URL
 from superset.app import create_app
 from superset.extensions import db
-from superset.models.core import Database
 
 with create_app().app_context():
+    from superset.models.core import Database
     connection = db.session.query(Database).filter_by(database_name="ClickHouse").one_or_none()
     if connection is None:
         connection = Database(database_name="ClickHouse")
