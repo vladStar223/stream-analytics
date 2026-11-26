@@ -38,13 +38,15 @@ def run(status):
     with retry(lambda: clickhouse_connect.get_client(host=os.environ["CLICKHOUSE_HOST"],
                port=int(os.environ["CLICKHOUSE_PORT"]), username=os.environ["CLICKHOUSE_USER"],
                password=os.environ["CLICKHOUSE_PASSWORD"], database=os.environ["CLICKHOUSE_DATABASE"])) as db:
-        known = set(retry(lambda: db.query("SELECT player_id FROM dim_players").result_columns[0]))
+        known = {row[0] for row in retry(lambda: db.query("SELECT player_id FROM dim_players").result_rows)}
         missing = [p for p in catalog if p[0] not in known]
         if missing:
             retry(lambda: db.insert("dim_players", missing, column_names=PLAYER_COLUMNS))
         now = datetime.now(UTC)
         start = now - timedelta(days=days)
-        last_ms = retry(lambda: db.command("SELECT maxOrNull(toUnixTimestamp64Milli(timestamp)) FROM fact_combat_events"))
+        last_ms = retry(lambda: db.query(
+            "SELECT maxOrNull(toUnixTimestamp64Milli(timestamp)) FROM fact_combat_events"
+        ).result_rows[0][0])
         cursor = datetime.fromtimestamp(last_ms / 1000, UTC) if last_ms is not None else start
         while not stop.is_set():
             now = datetime.now(UTC)
