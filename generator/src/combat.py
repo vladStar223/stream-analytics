@@ -5,7 +5,6 @@ from uuid import UUID
 
 CLASSES = ("Warrior", "Mage", "Priest", "Rogue", "Paladin")
 REALMS = ("Gordunni", "Warsong", "Silvermoon")
-ACTIONS = ("raid_boss", "pvp_arena", "mythic_dungeon", "crafting")
 PLAYER_COLUMNS = ("player_id", "nickname", "char_class", "faction", "guild_name", "server_realm")
 EVENT_COLUMNS = ("event_id", "timestamp", "player_id", "player_level", "action_type", "combat_role",
                  "score_points", "damage_dealt", "healing_done", "death_count", "gold_delta",
@@ -24,7 +23,11 @@ def activity(ts):
 def event(ts, rng: random.Random, catalog, anomaly_rate):
     player, _, cls, _, _, realm = rng.choice(catalog)
     level = 1 + player * 17 % 80
-    action = rng.choice(ACTIONS if level >= 60 else ("pvp_arena", "crafting"))
+    # Evening groups favour raids and dungeons while the event cadence stays fixed.
+    if level >= 60 and rng.random() < activity(ts):
+        action = rng.choice(("raid_boss", "mythic_dungeon"))
+    else:
+        action = rng.choice(("pvp_arena", "crafting"))
     fighting = action != "crafting"
     role = {"Warrior": "Tank", "Paladin": "Tank", "Priest": "Healer"}.get(cls, "DPS") if fighting else None
     damage = level * rng.randint(80, 140) * (3 if role == "DPS" else 1) if fighting else 0

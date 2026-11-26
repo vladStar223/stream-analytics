@@ -1,6 +1,3 @@
-#!/bin/bash
-set -eu
-clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database "$CLICKHOUSE_DB" --multiquery <<'SQL'
 CREATE TABLE IF NOT EXISTS dim_players (
     player_id UInt32, nickname String, char_class LowCardinality(String),
     faction LowCardinality(String), guild_name LowCardinality(String), server_realm LowCardinality(String)
@@ -20,4 +17,3 @@ SELECT toStartOfHour(e.timestamp) AS hour, p.server_realm AS server_realm,
        count() AS events, countIf(e.is_anomaly) AS anomalies
 FROM fact_combat_events AS e INNER JOIN dim_players AS p ON e.player_id = p.player_id
 GROUP BY hour, server_realm;
-SQL

@@ -10,11 +10,9 @@ services:
     image: clickhouse/clickhouse-server:24.3
     environment:
       <<: *db
-      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-analytics}
     ports: ["127.0.0.1:8123:8123", "127.0.0.1:9000:9000"]
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
       interval: 3s
@@ -27,11 +25,12 @@ services:
     ports: ["127.0.0.1:9100:9100"]
     environment:
       <<: *db
-      BATCH_SIZE: ${BATCH_SIZE:-100}
-      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-2}
+      GENERATOR_BATCH_SIZE: ${GENERATOR_BATCH_SIZE:-1000}
+      GENERATOR_BACKFILL_START: ${GENERATOR_BACKFILL_START:-2025-01-01T00:00:00}
+      GENERATOR_BACKFILL_STEP_SECONDS: ${GENERATOR_BACKFILL_STEP_SECONDS:-60}
+      GENERATOR_REALTIME_STEP_SECONDS: ${GENERATOR_REALTIME_STEP_SECONDS:-1}
       RANDOM_SEED: ${RANDOM_SEED:-42}
       ANOMALY_RATE: ${ANOMALY_RATE:-0.02}
-      BACKFILL_DAYS: ${BACKFILL_DAYS:-7}
 
   superset:
     build: ./superset
