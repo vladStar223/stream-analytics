@@ -1,12 +1,6 @@
-FROM python:3.11-slim
-
+FROM python:3.12-slim
 WORKDIR /app
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-RUN pip install --no-cache-dir clickhouse-connect numpy
-
-COPY src/ ./src/
-
-CMD ["python", "-u", "src/main.py"]
+ENV PYTHONUNBUFFERED=1
+RUN pip install --no-cache-dir clickhouse-connect==0.8.18
+COPY src/ ./
+CMD ["python", "main.py"]

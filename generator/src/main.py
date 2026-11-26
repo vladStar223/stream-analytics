@@ -1,63 +1,87 @@
-import os
-import sys
-import time
-import signal
+"""Resume from the latest stored timestamp, backfill history, then stream live batches."""
 import logging
-from datetime import datetime
-import numpy as np
+import os
+import random
+import signal
+from datetime import UTC, datetime, timedelta
+from threading import Event
 
-# Configure logging
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger("stream-generator")
+import clickhouse_connect
+from clickhouse_connect.driver.exceptions import OperationalError
+from combat import EVENT_COLUMNS, PLAYER_COLUMNS, activity, event, players
+from control import ControlServer, GeneratorStatus
 
-# Graceful shutdown handling
-running = True
+stop = Event()
+log = logging.getLogger("generator")
 
-def handle_signal(sig, frame):
-    global running
-    logger.info("Received termination signal (%s). Performing graceful shutdown...", sig)
-    running = False
 
-signal.signal(signal.SIGINT, handle_signal)
-signal.signal(signal.SIGTERM, handle_signal)
+def retry(operation):
+    delay = 1
+    while not stop.is_set():
+        try:
+            return operation()
+        except (OperationalError, OSError) as exc:
+            log.warning("ClickHouse unavailable (%s), retry in %ss", exc, delay)
+            stop.wait(delay)
+            delay = min(30, 2 * delay)
+    raise InterruptedError
 
-def main():
-    logger.info("Starting Data Stream Generator...")
 
-    # Load configuration from environment
-    host = os.getenv("CLICKHOUSE_HOST", "clickhouse")
-    port = int(os.getenv("CLICKHOUSE_PORT", "8123"))
-    user = os.getenv("CLICKHOUSE_USER", "default")
-    password = os.getenv("CLICKHOUSE_PASSWORD", "")
-    database = os.getenv("CLICKHOUSE_DATABASE", "analytics")
-    batch_size = int(os.getenv("BATCH_SIZE", "100"))
-    interval = float(os.getenv("INTERVAL_SECONDS", "2.0"))
-    stations_count = int(os.getenv("STATIONS_COUNT", "10"))
-    random_seed = int(os.getenv("RANDOM_SEED", "42"))
+def run(status):
+    interval = float(os.getenv("INTERVAL_SECONDS", "2"))
+    days = int(os.getenv("BACKFILL_DAYS", "7"))
+    probability = float(os.getenv("ANOMALY_RATE", "0.02"))
+    seed = int(os.getenv("RANDOM_SEED", "42"))
+    if interval <= 0 or days < 0 or not 0 <= probability <= 1:
+        raise ValueError("Invalid interval, history length or anomaly probability")
+    catalog = players()
+    with retry(lambda: clickhouse_connect.get_client(host=os.environ["CLICKHOUSE_HOST"],
+               port=int(os.environ["CLICKHOUSE_PORT"]), username=os.environ["CLICKHOUSE_USER"],
+               password=os.environ["CLICKHOUSE_PASSWORD"], database=os.environ["CLICKHOUSE_DATABASE"])) as db:
+        known = set(retry(lambda: db.query("SELECT player_id FROM dim_players").result_columns[0]))
+        missing = [p for p in catalog if p[0] not in known]
+        if missing:
+            retry(lambda: db.insert("dim_players", missing, column_names=PLAYER_COLUMNS))
+        now = datetime.now(UTC)
+        start = now - timedelta(days=days)
+        last_ms = retry(lambda: db.command("SELECT maxOrNull(toUnixTimestamp64Milli(timestamp)) FROM fact_combat_events"))
+        cursor = datetime.fromtimestamp(last_ms / 1000, UTC) if last_ms is not None else start
+        while not stop.is_set():
+            now = datetime.now(UTC)
+            historical = (now - cursor).total_seconds() > max(120, interval * 2)
+            size = status.batch_size
+            if historical:
+                times = []
+                while len(times) < size and cursor < now - timedelta(seconds=60):
+                    cursor = min(now, cursor + timedelta(seconds=30 / activity(cursor)))
+                    times.append(cursor)
+            else:
+                if stop.wait(interval):
+                    break
+                end = datetime.now(UTC)
+                if end <= cursor:
+                    continue
+                count = max(1, round(size * activity(end)))
+                times = [cursor + (end - cursor) * (i / count) for i in range(1, count + 1)]
+                cursor = end
+            rng = random.Random(f"{seed}-{times[0].isoformat()}")
+            batch = [event(ts, rng, catalog, probability) for ts in times]
+            retry(lambda: db.insert("fact_combat_events", batch, column_names=EVENT_COLUMNS))
+            progress = min(100, max(0, 100 * (cursor - start) / max(now - start, timedelta(seconds=1))))
+            status.update(mode="backfill" if historical else "realtime", current_timestamp=cursor, progress_pct=progress)
+            log.info("Inserted %d events through %s", len(batch), cursor)
 
-    np.random.seed(random_seed)
-
-    logger.info("Target ClickHouse: %s:%s (db: %s)", host, port, database)
-    logger.info("Batch size: %d, interval: %.1fs, stations: %d", batch_size, interval, stations_count)
-
-    batch_id = 0
-    while running:
-        batch_id += 1
-        now = datetime.utcnow()
-        logger.info("Generated batch #%d with %d records at %s", batch_id, batch_size, now.isoformat())
-        
-        # Sleep with graceful break
-        sleep_elapsed = 0.0
-        while running and sleep_elapsed < interval:
-            time.sleep(0.5)
-            sleep_elapsed += 0.5
-
-    logger.info("Generator stopped cleanly. Process exiting with code 0.")
-    sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stop.set())
+    status = GeneratorStatus(int(os.getenv("BATCH_SIZE", "100")))
+    status.set_batch_size(status.batch_size)
+    control = ControlServer(status, "0.0.0.0", 9100, stop).start()
+    try:
+        run(status)
+    except InterruptedError:
+        pass
+    finally:
+        control.stop()
