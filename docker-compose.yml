@@ -1,56 +1,66 @@
+x-db: &db
+  CLICKHOUSE_HOST: clickhouse
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-analytics}
+  CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+
 services:
-  # ============================================================================
-  # ClickHouse Database Server
-  # ============================================================================
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
-    container_name: clickhouse
-    restart: unless-stopped
-    ports:
-      - "8123:8123" # HTTP interface
-      - "9000:9000" # Native interface
     environment:
-      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-analytics}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      <<: *db
+    ports: ["127.0.0.1:8123:8123", "127.0.0.1:9000:9000"]
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8123/ping || exit 1"]
-      interval: 5s
+      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
+      interval: 3s
       timeout: 3s
-      retries: 10
-      start_period: 5s
-    networks:
-      - analytics_net
+      retries: 40
 
-  # ============================================================================
-  # Python Stream Data Generator
-  # ============================================================================
   generator:
-    build:
-      context: ./generator
-      dockerfile: Dockerfile
-    container_name: stream_generator
-    restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-    networks:
-      - analytics_net
+    build: ./generator
+    depends_on: {clickhouse: {condition: service_healthy}}
+    ports: ["127.0.0.1:9100:9100"]
+    environment:
+      <<: *db
+      GENERATOR_BATCH_SIZE: ${GENERATOR_BATCH_SIZE:-1000}
+      GENERATOR_BACKFILL_START: ${GENERATOR_BACKFILL_START:-2025-01-01T00:00:00}
+      GENERATOR_BACKFILL_STEP_SECONDS: ${GENERATOR_BACKFILL_STEP_SECONDS:-60}
+      GENERATOR_REALTIME_STEP_SECONDS: ${GENERATOR_REALTIME_STEP_SECONDS:-1}
+      GENERATOR_SEED: ${GENERATOR_SEED:-42}
+      GENERATOR_ANOMALY_PROBABILITY: ${GENERATOR_ANOMALY_PROBABILITY:-0.02}
 
-# ==============================================================================
-# Networks & Volumes
-# ==============================================================================
-networks:
-  analytics_net:
-    name: analytics_net
-    driver: bridge
+  superset:
+    build: ./superset
+    depends_on: {clickhouse: {condition: service_healthy}}
+    ports: ["127.0.0.1:8088:8088"]
+    volumes: [superset_home:/app/superset_home]
+    environment:
+      <<: *db
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-local-mmorpg-demo-secret-change-before-sharing}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+
+  ui:
+    build: ./ui
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on: {clickhouse: {condition: service_healthy}}
+    volumes: [/var/run/docker.sock:/var/run/docker.sock:ro]
+    environment:
+      <<: *db
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-stream-analytics}
+
+  jupyter:
+    build: ./jupyter
+    depends_on: {clickhouse: {condition: service_healthy}}
+    ports: ["127.0.0.1:8888:8888"]
+    volumes: [./notebooks:/home/jovyan/work]
+    environment:
+      <<: *db
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-mmorpg}
 
 volumes:
   clickhouse_data:
     name: clickhouse_data
+  superset_home:
