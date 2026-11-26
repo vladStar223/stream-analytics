@@ -33,8 +33,8 @@ def run(status):
     start = start.replace(tzinfo=UTC) if start.tzinfo is None else start.astimezone(UTC)
     history_step = timedelta(seconds=float(os.getenv("GENERATOR_BACKFILL_STEP_SECONDS", "60")))
     live_step = timedelta(seconds=float(os.getenv("GENERATOR_REALTIME_STEP_SECONDS", "1")))
-    probability = float(os.getenv("ANOMALY_RATE", "0.02"))
-    seed = int(os.getenv("RANDOM_SEED", "42"))
+    probability = float(os.getenv("GENERATOR_ANOMALY_PROBABILITY", "0.02"))
+    seed = int(os.getenv("GENERATOR_SEED", "42"))
     if min(history_step, live_step) < timedelta(milliseconds=1) or not 0 <= probability <= 1:
         raise ValueError("Steps must be at least 1 ms and anomaly probability between 0 and 1")
     catalog = players()
